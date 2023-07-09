@@ -26,6 +26,7 @@ destination_uri = f"{gcs_output_uri}/{gcs_output_uri_prefix}/"
 name = f"projects/{project_id}/locations/{location}/processors/{processor_id}"
 dataset_name = 'galaxy_insurance'
 table_name = 'claim_form'
+gcs_review_uri = f"{project_id}-pending-insurance"
 
 # Create a dict to create the schema and to avoid BigQuery load job fails due to inknown fields
 bq_schema={
@@ -150,24 +151,44 @@ def insurance(event, context):
                             entities_extracted_dict['admission_no'] = field_value.strip()
                         if 'claim no' in field_name.strip().lower() :
                             entities_extracted_dict['claim_no'] = field_value.strip()
-                      
-                print(entities_extracted_dict)
-                print('Writing to BQ')
-                #Write the entities to BQ
-                write_to_bq(dataset_name, table_name, entities_extracted_dict)
+                test_dict=entities_extracted_dict.copy()
+                for key,value in test_dict.items():
+                    if key not in bq_schema:
+                        print ('Deleting key:' + key)
+                        del entities_extracted_dict[key]
+                if(len(entities_extracted_dict)<5):
+                    print(entities_extracted_dict)
+                    print(len(entities_extracted_dict))
+                    #Deleting the intermediate files created by the Doc AI Parser
+                    blobs = bucket.list_blobs(prefix=gcs_output_uri_prefix)                    
+                    for blob1 in blobs:
+                        blob1.delete()                     
+                    source_bucket = storage_client.bucket(event['bucket'])
+                    source_blob1 = source_bucket.blob(event['name'])
+                    destination_bucket = storage_client.bucket(gcs_review_uri)
+                    print(destination_bucket)
+                    blob_copy2 = source_bucket.copy_blob(source_blob1, destination_bucket, event['name'])
+                    #delete from the input folder
+                    source_blob1.delete()
+                else:
+                    print(entities_extracted_dict)
+                    print('Writing to BQ')
+                    #Write the entities to BQ
+                    write_to_bq(dataset_name, table_name, entities_extracted_dict)
+                    #print(blobs)
+                    #Deleting the intermediate files created by the Doc AI Parser
+                    blobs = bucket.list_blobs(prefix=gcs_output_uri_prefix)
+                    for blob in blobs:
+                        blob.delete()
+                    #Copy input file to archive bucket
+                    source_bucket = storage_client.bucket(event['bucket'])
+                    source_blob = source_bucket.blob(event['name'])
+                    destination_bucket = storage_client.bucket(gcs_archive_bucket_name)
+                    blob_copy = source_bucket.copy_blob(source_blob, destination_bucket, event['name'])
+                    #delete from the input folder
+                    source_blob.delete()
                 
-        #print(blobs)
-        #Deleting the intermediate files created by the Doc AI Parser
-        blobs = bucket.list_blobs(prefix=gcs_output_uri_prefix)
-        for blob in blobs:
-            blob.delete()
-        #Copy input file to archive bucket
-        source_bucket = storage_client.bucket(event['bucket'])
-        source_blob = source_bucket.blob(event['name'])
-        destination_bucket = storage_client.bucket(gcs_archive_bucket_name)
-        blob_copy = source_bucket.copy_blob(source_blob, destination_bucket, event['name'])
-        #delete from the input folder
-        source_blob.delete()
+        
     else:
         print('Cannot parse the file type')
 
